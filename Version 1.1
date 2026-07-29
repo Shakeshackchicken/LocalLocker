@@ -1,0 +1,1528 @@
+import SwiftUI
+import MapKit
+import Combine
+
+// MARK: - Exact Logo Palette Colors
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3:
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (1, 1, 1, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
+    }
+
+    static let logoNavy   = Color(hex: "#2A3A8C")
+    static let logoCyan   = Color(hex: "#00A3E0")
+    static let logoOrange = Color(hex: "#F26522")
+    static let logoGold   = Color(hex: "#F8971D")
+}
+
+// MARK: - Data Models
+enum ProfileType {
+    case business, team
+}
+
+enum RoleType: String, CaseIterable {
+    case sponsor = "Business Sponsor"
+    case team = "Sports Team"
+}
+
+enum OfferStatus: String {
+    case pending = "Pending"
+    case accepted = "Accepted"
+    case declined = "Declined"
+    
+    var color: Color {
+        switch self {
+        case .pending: return .logoOrange
+        case .accepted: return .green
+        case .declined: return .red
+        }
+    }
+}
+
+struct UserPost: Identifiable, Equatable {
+    let id: UUID
+    var title: String
+    var content: String
+    var dateString: String
+    
+    init(id: UUID = UUID(), title: String, content: String, dateString: String = "Just Now") {
+        self.id = id
+        self.title = title
+        self.content = content
+        self.dateString = dateString
+    }
+}
+
+struct SponsorProfile: Identifiable {
+    let id = UUID()
+    let name: String
+    let type: ProfileType
+    let category: String
+    let rating: Double
+    let description: String
+    let locationName: String
+    let distance: String
+    let budgetOrFundsNeeded: String
+    let color: Color
+    let imageName: String
+    let coordinate: CLLocationCoordinate2D
+}
+
+struct UserAccount {
+    var name: String
+    var email: String
+    var role: RoleType
+    var organizationName: String
+    var location: String
+    var bio: String
+    var avatarImageName: String
+    var isVerified: Bool
+    var posts: [UserPost]
+}
+
+struct SponsorshipOffer: Identifiable {
+    let id = UUID()
+    let partnerName: String
+    let date: String
+    let amount: String
+    let terms: String
+    var status: OfferStatus
+    let isIncoming: Bool
+}
+
+struct ChatMessage: Identifiable {
+    let id = UUID()
+    let isFromUser: Bool
+    let text: String
+    let time: String
+}
+
+struct ChatThread: Identifiable {
+    let id = UUID()
+    let partnerName: String
+    let partnerImage: String
+    let partnerColor: Color
+    var lastMessageTime: String
+    var lastMessageText: String
+    var messages: [ChatMessage]
+}
+
+struct AppNotification: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let time: String
+    let icon: String
+    let color: Color
+    var isRead: Bool
+}
+
+// MARK: - Master Data
+struct MasterData {
+    static let allProfiles: [SponsorProfile] = [
+        SponsorProfile(name: "Central Coffee Roasters", type: .business, category: "Food & Beverage", rating: 4.8, description: "Local coffee chain looking to sponsor youth sports events.", locationName: "Central, HK", distance: "2.1 km", budgetOrFundsNeeded: "$5,000 HKD", color: .logoOrange, imageName: "cup.and.saucer.fill", coordinate: CLLocationCoordinate2D(latitude: 22.2819, longitude: 114.1581)),
+        SponsorProfile(name: "Kowloon Stags U16", type: .team, category: "Rugby", rating: 4.9, description: "Top-tier youth rugby team seeking jersey sponsorships for the upcoming autumn league.", locationName: "Kowloon, HK", distance: "4.5 km", budgetOrFundsNeeded: "$12,000 HKD", color: .logoCyan, imageName: "figure.rugby", coordinate: CLLocationCoordinate2D(latitude: 22.3193, longitude: 114.1694))
+    ]
+}
+
+// MARK: - App State Manager
+class AppStateManager: ObservableObject {
+    @Published var isAuthenticated: Bool = false
+    
+    @Published var currentUser: UserAccount? = UserAccount(
+        name: "Alex Johnson",
+        email: "alex@locallocker.com",
+        role: .team,
+        organizationName: "Victoria Peak Athletics",
+        location: "Hong Kong",
+        bio: "Building grassroots sports communities and empowering local youth talent.",
+        avatarImageName: "figure.run",
+        isVerified: true,
+        posts: [
+            UserPost(title: "Autumn League Tryouts", content: "Excited to announce our open tryouts next Saturday at Victoria Park!", dateString: "2 days ago"),
+            UserPost(title: "New Equipment Partner", content: "Huge thanks to our community partners for providing top-tier training kits this season.", dateString: "1 week ago")
+        ]
+    )
+    
+    @Published var walletBalance: Double = 14500.00
+    
+    @Published var offers: [SponsorshipOffer] = [
+        SponsorshipOffer(partnerName: "Central Coffee Roasters", date: "Oct 12, 2024", amount: "$5,000 HKD", terms: "Logo on primary team jerseys for 1 season.", status: .pending, isIncoming: true),
+        SponsorshipOffer(partnerName: "Kowloon Sports Gear", date: "Oct 10, 2024", amount: "$2,500 HKD", terms: "Social media shoutouts (x4).", status: .accepted, isIncoming: false)
+    ]
+    
+    @Published var chatThreads: [ChatThread] = [
+        ChatThread(partnerName: "Central Coffee Roasters", partnerImage: "cup.and.saucer.fill", partnerColor: .logoOrange, lastMessageTime: "10:42 AM", lastMessageText: "Sounds great! Let's review the contract.", messages: [
+            ChatMessage(isFromUser: false, text: "Hi Alex, we are interested in sponsoring the jerseys.", time: "10:30 AM"),
+            ChatMessage(isFromUser: true, text: "That's wonderful! I can send over the design mockups today.", time: "10:35 AM"),
+            ChatMessage(isFromUser: false, text: "Sounds great! Let's review the contract.", time: "10:42 AM")
+        ])
+    ]
+    
+    @Published var notifications: [AppNotification] = [
+        AppNotification(title: "Offer Accepted!", message: "Kowloon Sports Gear accepted your proposal.", time: "2h ago", icon: "checkmark.seal.fill", color: .green, isRead: false),
+        AppNotification(title: "New Message", message: "Central Coffee Roasters sent you a message.", time: "4h ago", icon: "message.fill", color: .logoCyan, isRead: false),
+        AppNotification(title: "Escrow Deposit", message: "$2,500 HKD has been secured in Escrow.", time: "1d ago", icon: "lock.shield.fill", color: .logoNavy, isRead: true)
+    ]
+    
+    func updateOfferStatus(id: UUID, newStatus: OfferStatus) {
+        if let index = offers.firstIndex(where: { $0.id == id }) {
+            offers[index].status = newStatus
+        }
+    }
+    
+    func sendMessage(to partnerName: String, text: String) {
+        if let index = chatThreads.firstIndex(where: { $0.partnerName == partnerName }) {
+            let newMessage = ChatMessage(isFromUser: true, text: text, time: "Now")
+            chatThreads[index].messages.append(newMessage)
+            chatThreads[index].lastMessageText = text
+            chatThreads[index].lastMessageTime = "Now"
+        }
+    }
+    
+    func markAllNotificationsRead() {
+        for i in 0..<notifications.count {
+            notifications[i].isRead = true
+        }
+    }
+}
+
+// MARK: - Root View
+struct ContentView: View {
+    @EnvironmentObject var appState: AppStateManager
+    
+    var body: some View {
+        Group {
+            if appState.isAuthenticated {
+                MainTabView()
+            } else {
+                AuthenticationView()
+            }
+        }
+    }
+}
+
+// MARK: - Authentication View
+struct AuthenticationView: View {
+    @EnvironmentObject var appState: AppStateManager
+    
+    @State private var email = ""
+    @State private var password = ""
+    @State private var orgName = ""
+    @State private var isSignUp = false
+    @State private var selectedRole: RoleType = .team
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.logoNavy.opacity(0.12), Color.logoCyan.opacity(0.08), Color(.systemGroupedBackground)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 24) {
+                    Spacer(minLength: 40)
+                    
+                    VStack(spacing: 12) {
+                        Image("AppLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 110)
+                            .shadow(color: .logoNavy.opacity(0.18), radius: 12, x: 0, y: 6)
+                        
+                        Text("LocalLocker")
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                            .foregroundColor(.logoNavy)
+                        
+                        Text(isSignUp ? "Connect your team or brand today" : "Welcome back! Log in to continue")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    VStack(spacing: 18) {
+                        HStack(spacing: 0) {
+                            Button(action: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isSignUp = false
+                                }
+                            }) {
+                                Text("Sign In")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(!isSignUp ? Color.white : Color.clear)
+                                    .foregroundColor(!isSignUp ? .logoNavy : .secondary)
+                                    .cornerRadius(10)
+                                    .shadow(color: !isSignUp ? Color.black.opacity(0.08) : Color.clear, radius: 4)
+                            }
+                            
+                            Button(action: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isSignUp = true
+                                }
+                            }) {
+                                Text("Sign Up")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(isSignUp ? Color.white : Color.clear)
+                                    .foregroundColor(isSignUp ? .logoNavy : .secondary)
+                                    .cornerRadius(10)
+                                    .shadow(color: isSignUp ? Color.black.opacity(0.08) : Color.clear, radius: 4)
+                            }
+                        }
+                        .padding(4)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                        
+                        if isSignUp {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("ACCOUNT TYPE")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.secondary)
+                                
+                                Picker("Role", selection: $selectedRole) {
+                                    ForEach(RoleType.allCases, id: \.self) { role in
+                                        Text(role.rawValue).tag(role)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                        
+                        VStack(spacing: 14) {
+                            if isSignUp {
+                                ModernTextField(icon: "building.2.fill", placeholder: "Organization Name", text: $orgName)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
+                            
+                            ModernTextField(icon: "envelope.fill", placeholder: "Email address", text: $email)
+                                .autocapitalization(.none)
+                            
+                            ModernSecureField(icon: "lock.fill", placeholder: "Password", text: $password)
+                        }
+                        
+                        Button(action: {
+                            withAnimation {
+                                if isSignUp {
+                                    appState.currentUser?.role = selectedRole
+                                    if !orgName.isEmpty {
+                                        appState.currentUser?.organizationName = orgName
+                                    }
+                                }
+                                appState.isAuthenticated = true
+                            }
+                        }) {
+                            HStack {
+                                Text(isSignUp ? "Create Account" : "Sign In")
+                                    .font(.headline)
+                                Image(systemName: "arrow.right")
+                                    .font(.subheadline)
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(
+                                LinearGradient(colors: [.logoNavy, .logoCyan], startPoint: .leading, endPoint: .trailing)
+                            )
+                            .cornerRadius(14)
+                            .shadow(color: .logoNavy.opacity(0.25), radius: 8, x: 0, y: 4)
+                        }
+                        .padding(.top, 6)
+                    }
+                    .padding(22)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(24)
+                    .shadow(color: Color.black.opacity(0.06), radius: 15, x: 0, y: 5)
+                    .padding(.horizontal)
+                    
+                    Spacer(minLength: 20)
+                }
+            }
+        }
+    }
+}
+
+struct ModernTextField: View {
+    let icon: String
+    let placeholder: String
+    @Binding var text: String
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundColor(.logoCyan)
+                .frame(width: 20)
+            TextField(placeholder, text: $text)
+                .font(.subheadline)
+        }
+        .padding(14)
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+struct ModernSecureField: View {
+    let icon: String
+    let placeholder: String
+    @Binding var text: String
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundColor(.logoCyan)
+                .frame(width: 20)
+            SecureField(placeholder, text: $text)
+                .font(.subheadline)
+        }
+        .padding(14)
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - Main Tab Application
+struct MainTabView: View {
+    @EnvironmentObject var appState: AppStateManager
+    @AppStorage("isDarkMode") private var isDarkMode = false
+    
+    var body: some View {
+        TabView {
+            HomeFeedView()
+                .tabItem { Label("Discover", systemImage: "magnifyingglass") }
+            MessagesListView()
+                .tabItem { Label("Messages", systemImage: "message.fill") }
+            PaymentsView()
+                .tabItem { Label("Wallet", systemImage: "creditcard.fill") }
+            UserProfileView()
+                .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
+        }
+        .preferredColorScheme(isDarkMode ? .dark : .light)
+        .tint(.logoNavy)
+    }
+}
+
+// MARK: - Home Feed (Role-Filtered Visibility)
+struct HomeFeedView: View {
+    @EnvironmentObject var appState: AppStateManager
+    @State private var showNotifications = false
+    @State private var searchText = ""
+    
+    var unreadCount: Int {
+        appState.notifications.filter { !$0.isRead }.count
+    }
+    
+    // Filter profiles based on current user role:
+    // - Sports Teams see only Businesses
+    // - Business Sponsors see only Sports Teams
+    var filteredProfiles: [SponsorProfile] {
+        let userRole = appState.currentUser?.role ?? .team
+        
+        // Base list filtered by cross-role restriction
+        let roleFilteredList = MasterData.allProfiles.filter { profile in
+            if userRole == .team {
+                return profile.type == .business // Sports teams only see businesses
+            } else {
+                return profile.type == .team     // Businesses only see sports teams
+            }
+        }
+        
+        // Apply search text query if present
+        if searchText.isEmpty {
+            return roleFilteredList
+        } else {
+            return roleFilteredList.filter {
+                $0.name.localizedCaseInsensitiveContains(searchText) ||
+                $0.category.localizedCaseInsensitiveContains(searchText) ||
+                $0.locationName.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        NavigationLink(destination: AIPitchAssistantView()) {
+                            ExtraFeatureChip(title: "AI Pitch Assistant", icon: "sparkles", color: .logoGold)
+                        }
+                        NavigationLink(destination: ExtraFeaturesHubView()) {
+                            ExtraFeatureChip(title: "Trust & Safety", icon: "shield.fill", color: .logoNavy)
+                        }
+                        NavigationLink(destination: SavedPartnershipsView()) {
+                            ExtraFeatureChip(title: "Saved Profiles", icon: "bookmark.fill", color: .logoCyan)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                }
+                
+                LazyVStack(spacing: 16) {
+                    if filteredProfiles.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 32))
+                                .foregroundColor(.secondary)
+                            Text("No matching profiles available.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 60)
+                    } else {
+                        ForEach(filteredProfiles) { profile in
+                            NavigationLink(destination: IndividualProfileView(profile: profile)) {
+                                SponsorProfileCard(profile: profile)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.bottom)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Discover")
+            .searchable(text: $searchText, prompt: appState.currentUser?.role == .team ? "Search business sponsors..." : "Search sports teams...")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink(destination: InteractiveMapView()) {
+                        Image(systemName: "map.fill")
+                            .foregroundColor(.logoNavy)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { showNotifications = true }) {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "bell.fill")
+                                .foregroundColor(.logoNavy)
+                            if unreadCount > 0 {
+                                Circle()
+                                    .fill(Color.logoOrange)
+                                    .frame(width: 10, height: 10)
+                                    .offset(x: 2, y: -2)
+                            }
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showNotifications) {
+                NotificationsSheetView()
+            }
+        }
+    }
+}
+
+struct ExtraFeatureChip: View {
+    let title: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .foregroundColor(color)
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(.systemBackground))
+        .cornerRadius(20)
+        .shadow(color: Color.black.opacity(0.05), radius: 3, x: 0, y: 2)
+    }
+}
+
+struct SponsorProfileCard: View {
+    let profile: SponsorProfile
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(profile.color.opacity(0.12))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: profile.imageName)
+                        .font(.title2)
+                        .foregroundColor(profile.color)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(profile.name)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    HStack(spacing: 6) {
+                        Text(profile.type == .business ? "Sponsor" : "Sports Team")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(profile.type == .business ? Color.logoOrange.opacity(0.15) : Color.logoCyan.opacity(0.15))
+                            .foregroundColor(profile.type == .business ? .logoOrange : .logoCyan)
+                            .cornerRadius(6)
+                        Text(profile.category)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+                HStack(spacing: 3) {
+                    Image(systemName: "star.fill")
+                        .font(.caption2)
+                        .foregroundColor(.logoGold)
+                    Text("\(profile.rating, specifier: "%.1f")")
+                        .font(.caption)
+                        .bold()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
+            }
+            
+            Text(profile.description)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+            
+            Divider()
+            
+            HStack {
+                Label(profile.locationName, systemImage: "mappin.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Text("• \(profile.distance)")
+                    .font(.caption)
+                    .foregroundColor(.logoCyan)
+                Spacer()
+                Text(profile.budgetOrFundsNeeded)
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.logoOrange)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(20)
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+        .padding(.horizontal)
+    }
+}
+
+// MARK: - User Profile View
+struct UserProfileView: View {
+    @EnvironmentObject var appState: AppStateManager
+    @State private var showEditProfileSheet = false
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    VStack(spacing: 14) {
+                        ZStack(alignment: .bottomTrailing) {
+                            ZStack {
+                                Circle()
+                                    .fill(LinearGradient(colors: [.logoNavy, .logoCyan], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                    .frame(width: 90, height: 90)
+                                Image(systemName: appState.currentUser?.avatarImageName ?? "person.crop.circle.fill")
+                                    .font(.system(size: 42))
+                                    .foregroundColor(.white)
+                            }
+                            Button(action: { showEditProfileSheet = true }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.logoOrange)
+                                        .frame(width: 30, height: 30)
+                                    Image(systemName: "pencil")
+                                        .font(.caption)
+                                        .foregroundColor(.white)
+                                }
+                            }
+                        }
+                        
+                        VStack(spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text(appState.currentUser?.name ?? "User Name")
+                                    .font(.title2)
+                                    .bold()
+                                if appState.currentUser?.isVerified == true {
+                                    Image(systemName: "checkmark.seal.fill")
+                                        .foregroundColor(.logoCyan)
+                                        .font(.title3)
+                                }
+                            }
+                            Text(appState.currentUser?.organizationName ?? "Organization Name")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.logoCyan)
+                            Text(appState.currentUser?.role.rawValue ?? "")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                                .background(Color.logoNavy.opacity(0.1))
+                                .foregroundColor(.logoNavy)
+                                .cornerRadius(12)
+                                .padding(.top, 4)
+                        }
+                        
+                        Button(action: { showEditProfileSheet = true }) {
+                            Label("Edit Profile & Posts", systemImage: "slider.horizontal.3")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.logoNavy)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 10)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(12)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 22)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+                    .padding(.horizontal)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("About & Organization Bio")
+                            .font(.headline)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(appState.currentUser?.bio ?? "No bio added yet.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Divider()
+                            HStack {
+                                Label("Location", systemImage: "mappin.and.ellipse")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                                Spacer()
+                                Text(appState.currentUser?.location ?? "N/A")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                        }
+                        .padding(16)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(16)
+                    }
+                    .padding(.horizontal)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Latest Updates & Posts")
+                                .font(.headline)
+                            Spacer()
+                            Button("Manage Posts") {
+                                showEditProfileSheet = true
+                            }
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.logoOrange)
+                        }
+                        
+                        if let posts = appState.currentUser?.posts, !posts.isEmpty {
+                            ForEach(posts) { post in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(post.title)
+                                            .font(.subheadline)
+                                            .bold()
+                                        Spacer()
+                                        Text(post.dateString)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Text(post.content)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(14)
+                                .background(Color(.systemBackground))
+                                .cornerRadius(14)
+                            }
+                        } else {
+                            Text("No posts published yet. Tap 'Manage Posts' to add your first update!")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding()
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .background(Color(.systemBackground))
+                                .cornerRadius(14)
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    VStack(spacing: 1) {
+                        NavigationLink(destination: ExtraFeaturesHubView()) {
+                            ProfileMenuRow(title: "Extra Features & Tools", icon: "sparkles", color: .logoGold)
+                        }
+                        NavigationLink(destination: SavedPartnershipsView()) {
+                            ProfileMenuRow(title: "Saved Partnerships", icon: "bookmark.fill", color: .logoCyan)
+                        }
+                        NavigationLink(destination: DraftProposalsView()) {
+                            ProfileMenuRow(title: "Draft Proposals", icon: "doc.text.fill", color: .logoOrange)
+                        }
+                        NavigationLink(destination: SettingsView()) {
+                            ProfileMenuRow(title: "Settings", icon: "gearshape.fill", color: .gray)
+                        }
+                    }
+                    .background(Color(.systemBackground))
+                    .cornerRadius(16)
+                    .padding(.horizontal)
+                }
+                .padding(.vertical)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Profile")
+            .sheet(isPresented: $showEditProfileSheet) {
+                EditProfileView()
+            }
+        }
+    }
+}
+
+struct ProfileMenuRow: View {
+    let title: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(color)
+                .frame(width: 30)
+            Text(title)
+                .foregroundColor(.primary)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .background(Color(.systemBackground))
+    }
+}
+
+// MARK: - Edit Profile Sheet
+struct EditProfileView: View {
+    @EnvironmentObject var appState: AppStateManager
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var name: String = ""
+    @State private var organizationName: String = ""
+    @State private var location: String = ""
+    @State private var bio: String = ""
+    @State private var selectedAvatar: String = "sportscourt.fill"
+    
+    @State private var userPosts: [UserPost] = []
+    @State private var newPostTitle: String = ""
+    @State private var newPostContent: String = ""
+    @State private var showNewPostSheet = false
+    
+    let availableAvatars = [
+        "sportscourt.fill", "figure.run", "cup.and.saucer.fill",
+        "figure.cross.training", "bag.fill", "baseball.fill",
+        "star.fill", "shield.fill"
+    ]
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Profile Avatar Icon") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            ForEach(availableAvatars, id: \.self) { avatar in
+                                ZStack {
+                                    Circle()
+                                        .fill(selectedAvatar == avatar ? Color.logoCyan : Color(.systemGray5))
+                                        .frame(width: 50, height: 50)
+                                    Image(systemName: avatar)
+                                        .font(.title3)
+                                        .foregroundColor(selectedAvatar == avatar ? .white : .primary)
+                                }
+                                .onTapGesture { selectedAvatar = avatar }
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+                
+                Section("Organization & Contact Info") {
+                    TextField("Full Name", text: $name)
+                    TextField("Organization Name", text: $organizationName)
+                    TextField("Location", text: $location)
+                }
+                
+                Section("Organization Bio") {
+                    TextEditor(text: $bio)
+                        .frame(height: 90)
+                }
+                
+                Section(header: HStack {
+                    Text("Organization News & Updates")
+                    Spacer()
+                    Button(action: { showNewPostSheet = true }) {
+                        Label("Add Post", systemImage: "plus.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.logoOrange)
+                    }
+                }) {
+                    if userPosts.isEmpty {
+                        Text("No posts created yet.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(userPosts) { post in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(post.title)
+                                    .font(.headline)
+                                Text(post.content)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .onDelete(perform: deletePost)
+                    }
+                }
+            }
+            .navigationTitle("Edit Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        if let current = appState.currentUser {
+                            appState.currentUser = UserAccount(
+                                name: name.isEmpty ? current.name : name,
+                                email: current.email,
+                                role: current.role,
+                                organizationName: organizationName.isEmpty ? current.organizationName : organizationName,
+                                location: location.isEmpty ? current.location : location,
+                                bio: bio.isEmpty ? current.bio : bio,
+                                avatarImageName: selectedAvatar,
+                                isVerified: current.isVerified,
+                                posts: userPosts
+                            )
+                        }
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                if let current = appState.currentUser {
+                    name = current.name
+                    organizationName = current.organizationName
+                    location = current.location
+                    bio = current.bio
+                    selectedAvatar = current.avatarImageName
+                    userPosts = current.posts
+                }
+            }
+            .sheet(isPresented: $showNewPostSheet) {
+                NavigationStack {
+                    Form {
+                        Section("New Post Header") {
+                            TextField("Headline / Title", text: $newPostTitle)
+                        }
+                        Section("Post Content") {
+                            TextEditor(text: $newPostContent)
+                                .frame(height: 120)
+                        }
+                    }
+                    .navigationTitle("Create Post")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                newPostTitle = ""
+                                newPostContent = ""
+                                showNewPostSheet = false
+                            }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Add") {
+                                guard !newPostTitle.isEmpty else { return }
+                                let createdPost = UserPost(title: newPostTitle, content: newPostContent, dateString: "Just Now")
+                                userPosts.insert(createdPost, at: 0)
+                                newPostTitle = ""
+                                newPostContent = ""
+                                showNewPostSheet = false
+                            }
+                            .disabled(newPostTitle.isEmpty)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    func deletePost(at offsets: IndexSet) {
+        userPosts.remove(atOffsets: offsets)
+    }
+}
+
+// MARK: - Payments / Wallet View
+struct PaymentsView: View {
+    @EnvironmentObject var appState: AppStateManager
+    @State private var selectedTab = 0
+    
+    var incomingOffers: [SponsorshipOffer] { appState.offers.filter { $0.isIncoming } }
+    var outgoingOffers: [SponsorshipOffer] { appState.offers.filter { !$0.isIncoming } }
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    VStack(spacing: 14) {
+                        HStack {
+                            Text("Escrow Vault Balance")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Image(systemName: "lock.shield.fill")
+                                .foregroundColor(.logoCyan)
+                        }
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("$\(appState.walletBalance, specifier: "%.2f")")
+                                .font(.system(size: 38, weight: .bold))
+                                .foregroundColor(.logoNavy)
+                            Text("HKD")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        Divider()
+                        HStack(spacing: 12) {
+                            Button(action: {}) {
+                                Label("Add Funds", systemImage: "plus.circle.fill")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color.logoNavy)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            Button(action: {}) {
+                                Label("Withdraw", systemImage: "arrow.down.circle.fill")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color(.systemGray5))
+                                    .foregroundColor(.primary)
+                                    .cornerRadius(12)
+                            }
+                        }
+                    }
+                    .padding(18)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+                    .padding(.horizontal)
+                    
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Sponsorship Offers")
+                            .font(.title3)
+                            .bold()
+                            .padding(.horizontal)
+                        
+                        Picker("Offers Type", selection: $selectedTab) {
+                            Text("Incoming (\(incomingOffers.count))").tag(0)
+                            Text("Outgoing (\(outgoingOffers.count))").tag(1)
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+                        
+                        if selectedTab == 0 {
+                            if incomingOffers.isEmpty {
+                                Text("No incoming offers right now.")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                            } else {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(incomingOffers) { offer in
+                                        IncomingOfferCard(offer: offer)
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                        } else {
+                            if outgoingOffers.isEmpty {
+                                Text("No outgoing offers sent yet.")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                            } else {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(outgoingOffers) { offer in
+                                        OutgoingOfferCard(offer: offer)
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Wallet")
+        }
+    }
+}
+
+struct IncomingOfferCard: View {
+    @EnvironmentObject var appState: AppStateManager
+    let offer: SponsorshipOffer
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(offer.partnerName)
+                        .font(.headline)
+                    Text(offer.date)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Text(offer.amount)
+                    .font(.headline)
+                    .foregroundColor(.logoOrange)
+            }
+            Text(offer.terms)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Divider()
+            if offer.status == .pending {
+                HStack(spacing: 12) {
+                    Button(action: { appState.updateOfferStatus(id: offer.id, newStatus: .accepted) }) {
+                        Text("Accept Offer")
+                            .font(.subheadline)
+                            .bold()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    Button(action: { appState.updateOfferStatus(id: offer.id, newStatus: .declined) }) {
+                        Text("Decline")
+                            .font(.subheadline)
+                            .bold()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color(.systemGray5))
+                            .foregroundColor(.red)
+                            .cornerRadius(10)
+                    }
+                }
+            } else {
+                HStack {
+                    Spacer()
+                    Text(offer.status.rawValue)
+                        .font(.caption)
+                        .bold()
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(offer.status.color.opacity(0.15))
+                        .foregroundColor(offer.status.color)
+                        .cornerRadius(8)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.03), radius: 5, x: 0, y: 2)
+    }
+}
+
+struct OutgoingOfferCard: View {
+    let offer: SponsorshipOffer
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(offer.partnerName)
+                        .font(.headline)
+                    Text(offer.date)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Text(offer.amount)
+                    .font(.headline)
+                    .foregroundColor(.logoNavy)
+            }
+            Text(offer.terms)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            HStack {
+                Spacer()
+                Text("Status: \(offer.status.rawValue)")
+                    .font(.caption)
+                    .bold()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(offer.status.color.opacity(0.15))
+                    .foregroundColor(offer.status.color)
+                    .cornerRadius(8)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.03), radius: 5, x: 0, y: 2)
+    }
+}
+
+// MARK: - Messages & Detail
+struct MessagesListView: View {
+    @EnvironmentObject var appState: AppStateManager
+    
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(appState.chatThreads) { thread in
+                    NavigationLink(destination: ChatDetailView(thread: thread)) {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle()
+                                    .fill(thread.partnerColor.opacity(0.15))
+                                    .frame(width: 48, height: 48)
+                                Image(systemName: thread.partnerImage)
+                                    .foregroundColor(thread.partnerColor)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(thread.partnerName)
+                                        .font(.headline)
+                                    Spacer()
+                                    Text(thread.lastMessageTime)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Text(thread.lastMessageText)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .navigationTitle("Messages")
+        }
+    }
+}
+
+struct ChatDetailView: View {
+    @EnvironmentObject var appState: AppStateManager
+    let thread: ChatThread
+    @State private var messageText = ""
+    
+    var currentThread: ChatThread {
+        appState.chatThreads.first(where: { $0.partnerName == thread.partnerName }) ?? thread
+    }
+    
+    var body: some View {
+        VStack {
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(currentThread.messages) { msg in
+                        HStack {
+                            if msg.isFromUser { Spacer() }
+                            VStack(alignment: msg.isFromUser ? .trailing : .leading, spacing: 2) {
+                                Text(msg.text)
+                                    .padding(12)
+                                    .background(msg.isFromUser ? Color.logoCyan : Color(.systemGray5))
+                                    .foregroundColor(msg.isFromUser ? .white : .primary)
+                                    .cornerRadius(16)
+                                Text(msg.time)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if !msg.isFromUser { Spacer() }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+                .padding(.vertical)
+            }
+            
+            HStack(spacing: 12) {
+                TextField("Type a message...", text: $messageText)
+                    .padding(12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(20)
+                
+                Button(action: {
+                    guard !messageText.isEmpty else { return }
+                    appState.sendMessage(to: thread.partnerName, text: messageText)
+                    messageText = ""
+                }) {
+                    Image(systemName: "paperplane.fill")
+                        .foregroundColor(.white)
+                        .padding(12)
+                        .background(Color.logoCyan)
+                        .clipShape(Circle())
+                }
+            }
+            .padding()
+            .background(Color(.systemBackground))
+        }
+        .navigationTitle(thread.partnerName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Interactive Map
+struct InteractiveMapView: View {
+    @State private var cameraPosition: MapCameraPosition = .region(
+        MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 22.3193, longitude: 114.1694),
+            span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
+        )
+    )
+    
+    var body: some View {
+        Map(position: $cameraPosition) {
+            ForEach(MasterData.allProfiles) { profile in
+                Annotation(profile.name, coordinate: profile.coordinate) {
+                    ZStack {
+                        Circle()
+                            .fill(profile.color)
+                            .frame(width: 32, height: 32)
+                        Image(systemName: profile.imageName)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                    }
+                    .shadow(radius: 4)
+                }
+            }
+        }
+        .navigationTitle("Map")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Individual Profile View
+struct IndividualProfileView: View {
+    let profile: SponsorProfile
+    @EnvironmentObject var appState: AppStateManager
+    @Environment(\.dismiss) var dismiss
+    @State private var showProposalSentAlert = false
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 16) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(profile.color.opacity(0.15))
+                            .frame(width: 70, height: 70)
+                        Image(systemName: profile.imageName)
+                            .font(.system(size: 32))
+                            .foregroundColor(profile.color)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(profile.name)
+                            .font(.title2)
+                            .bold()
+                        Text(profile.category)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Label(profile.locationName, systemImage: "mappin.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.logoCyan)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.systemBackground))
+                .cornerRadius(20)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("About")
+                        .font(.headline)
+                    Text(profile.description)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.systemBackground))
+                .cornerRadius(16)
+                
+                Button(action: {
+                    showProposalSentAlert = true
+                }) {
+                    Text("Send Sponsorship Proposal")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(LinearGradient(colors: [.logoNavy, .logoCyan], startPoint: .leading, endPoint: .trailing))
+                        .cornerRadius(16)
+                }
+            }
+            .padding()
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(profile.name)
+        .alert("Proposal Sent!", isPresented: $showProposalSentAlert) {
+            Button("OK") { dismiss() }
+        } message: {
+            Text("Your partnership request has been submitted to \(profile.name).")
+        }
+    }
+}
+
+// MARK: - Extra Views
+struct SavedPartnershipsView: View {
+    var body: some View {
+        List {
+            Text("Central Coffee Roasters (Bookmarked)")
+            Text("Kowloon Stags U16 (Bookmarked)")
+        }
+        .navigationTitle("Saved Partnerships")
+    }
+}
+
+struct DraftProposalsView: View {
+    var body: some View {
+        List {
+            Text("Draft Pitch for Kowloon Sports Gear")
+            Text("Autumn Tournament Subsidies Pitch")
+        }
+        .navigationTitle("Draft Proposals")
+    }
+}
+
+struct ExtraFeaturesHubView: View {
+    var body: some View {
+        List {
+            Section(header: Text("AI Tools")) {
+                NavigationLink(destination: AIPitchAssistantView()) {
+                    Label("Pitch AI Assistant", systemImage: "sparkles")
+                        .foregroundColor(.logoOrange)
+                }
+            }
+            Section(header: Text("Trust & Safety")) {
+                Label("Verification Center", systemImage: "checkmark.seal.fill")
+                    .foregroundColor(.logoCyan)
+                Label("Refunds & Escrow Claims", systemImage: "shield.fill")
+                    .foregroundColor(.logoNavy)
+            }
+        }
+        .navigationTitle("Extra Features")
+    }
+}
+
+struct AIPitchAssistantView: View {
+    @State private var targetSponsor = ""
+    @State private var pitchFocus = "Financial Support"
+    @State private var generatedPitch = ""
+    @State private var isGenerating = false
+    
+    let focusOptions = ["Financial Support", "Equipment", "Venue Space", "Cross-Promotion"]
+    
+    var body: some View {
+        Form {
+            Section("Pitch Details") {
+                TextField("Who are you pitching to?", text: $targetSponsor)
+                Picker("Primary Ask", selection: $pitchFocus) {
+                    ForEach(focusOptions, id: \.self) {
+                        Text($0)
+                    }
+                }
+            }
+            
+            Section {
+                Button(action: generatePitch) {
+                    HStack {
+                        Spacer()
+                        if isGenerating {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        } else {
+                            Text("Generate Magic Pitch")
+                                .bold()
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                    .foregroundColor(.white)
+                }
+                .listRowBackground(Color.logoNavy)
+                .disabled(targetSponsor.isEmpty || isGenerating)
+            }
+            
+            if !generatedPitch.isEmpty {
+                Section("Your AI Generated Pitch") {
+                    TextEditor(text: $generatedPitch)
+                        .frame(minHeight: 200)
+                        .font(.body)
+                }
+            }
+        }
+        .navigationTitle("AI Pitch Assistant")
+    }
+    
+    func generatePitch() {
+        isGenerating = true
+        generatedPitch = ""
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            isGenerating = false
+            let sponsorName = targetSponsor.isEmpty ? "[Sponsor Name]" : targetSponsor
+            generatedPitch = """
+            Dear \(sponsorName) Team,
+
+            We love the impact you make in the local community and believe a partnership would be mutually beneficial. 
+            
+            Our organization is looking for a sponsorship focused on \(pitchFocus). In return, we can offer prominent logo placement and engaging community shoutouts tailored to your brand.
+            
+            I'd love to chat further about how we can support each other!
+            
+            Best regards,
+            [Your Name]
+            """
+        }
+    }
+}
